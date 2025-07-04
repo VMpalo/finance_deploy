@@ -13,11 +13,13 @@ load_dotenv()
 
 
 
-
+import os
 
 embeddings = MistralAIEmbeddings(model="mistral-embed")
+index_path = os.path.join(os.path.dirname(__file__), "faiss_index")
+vector = FAISS.load_local(index_path, embeddings, allow_dangerous_deserialization=True)
 
-vector = FAISS.load_local(r"C:\Users\pablo\OneDrive\Desktop\Home\my_projects\finance_deploy\real-deploy\scout\faiss_index", embeddings, allow_dangerous_deserialization=True)
+
 
 retriever = vector.as_retriever()
 
