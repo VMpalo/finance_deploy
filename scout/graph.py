@@ -184,7 +184,7 @@ def generate(state: GraphState) -> Dict[str, Any]:
 
 
 
-from IPython.display import Image, display
+
 
 from langgraph.graph import END, StateGraph
 
@@ -226,7 +226,3 @@ graph= builder.compile()
 
 # graph.get_graph().draw_mermaid_png(output_file_path="graph.png")
 
-thread={"configurable":{"thread_id":"skf8j"}}
-initial_input= {"messages": "thank you my friend"}
-for event in graph.stream(initial_input, thread, stream_mode="values"):
-  event["messages"][-1].pretty_print()
