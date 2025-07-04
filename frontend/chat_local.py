@@ -1,5 +1,5 @@
-from scout.graph import Agent
-from scout.prompts import prompts
+from ..scout.graph import Agent
+from ..scout.prompts import prompts
 
 
 def main():

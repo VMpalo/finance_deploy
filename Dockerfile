@@ -3,13 +3,13 @@ FROM langchain/langgraph-api:3.12
 
 
 # -- Adding local package . --
-ADD . /deps/langgraph-intro
+ADD . /deps/real-deploy
 # -- End of local package . --
 
 # -- Installing all local dependencies --
 RUN PYTHONDONTWRITEBYTECODE=1 pip install --no-cache-dir -c /api/constraints.txt -e /deps/*
 # -- End of local dependencies install --
-ENV LANGSERVE_GRAPHS='{"scout": "/deps/langgraph-intro/scout/graph.py:graph"}'
+ENV LANGSERVE_GRAPHS='{"scout": "/deps/real-deploy/scout/graph.py:graph"}'
 
 
 
@@ -21,4 +21,4 @@ RUN PYTHONDONTWRITEBYTECODE=1 pip install --no-cache-dir --no-deps -e /api
 RUN pip uninstall -y pip setuptools wheel &&     rm -rf /usr/local/lib/python*/site-packages/pip* /usr/local/lib/python*/site-packages/setuptools* /usr/local/lib/python*/site-packages/wheel* &&     find /usr/local/bin -name "pip*" -delete
 # -- End of pip removal --
 
-WORKDIR /deps/langgraph-intro
+WORKDIR /deps/real-deploy

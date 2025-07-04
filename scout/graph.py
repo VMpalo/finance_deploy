@@ -1,156 +1,230 @@
-from pydantic import BaseModel
-from typing import Annotated, List, Generator
+from typing import TypedDict
+from typing import List
+from langgraph.graph import MessagesState
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, AIMessageChunk
-from langgraph.graph.message import add_messages
-from langgraph.graph import StateGraph, START, END
-from langgraph.prebuilt import ToolNode
-from langgraph.checkpoint.memory import MemorySaver
-from scout.tools import query_db, generate_visualization
-from scout.prompts import prompts
+from langchain.prompts import ChatPromptTemplate
+from pydantic import BaseModel, Field
+from typing import Dict, Any
+from langchain_mistralai.embeddings import MistralAIEmbeddings
+from langchain_community.vectorstores import FAISS
+import os
+from dotenv import load_dotenv
+load_dotenv()
 
 
-class  ScoutState(BaseModel):
-    messages: Annotated[List[BaseMessage], add_messages] = []
-    chart_json: str = ""
 
 
-class Agent:
-    """
-    Agent class for implementing Langgraph agents.
 
-    Attributes:
-        name: The name of the agent.
-        tools: The tools available to the agent.
-        model: The model to use for the agent.
-        system_prompt: The system prompt for the agent.
-        temperature: The temperature for the agent.
-    """
-    def __init__(
-            self, 
-            name: str, 
-            tools: List = [query_db, generate_visualization],
-            model: str = "gpt-4.1-mini-2025-04-14", 
-            system_prompt: str = "You are a helpful assistant.",
-            temperature: float = 0.1
-            ):
-        self.name = name
-        self.tools = tools
-        self.model = model
-        self.system_prompt = system_prompt
-        self.temperature = temperature
-        
-        self.llm = ChatOpenAI(
-            model=self.model,
-            temperature=self.temperature
-            ).bind_tools(self.tools)
-        
-        self.runnable = self.build_graph()
+embeddings = MistralAIEmbeddings(model="mistral-embed")
+
+vector = FAISS.load_local(r"C:\Users\pablo\OneDrive\Desktop\Home\my_projects\finance_deploy\real-deploy\scout\faiss_index", embeddings, allow_dangerous_deserialization=True)
+
+retriever = vector.as_retriever()
 
 
-    def build_graph(self):
-        """
-        Build the LangGraph application.
-        """
-        def scout_node(state: ScoutState) -> ScoutState:
-            response = self.llm.invoke(
-                [SystemMessage(content=self.system_prompt)] +
-                state.messages
-                )
-            state.messages = state.messages + [response]
-            return state
-        
-        def router(state: ScoutState) -> str:
-            last_message = state.messages[-1]
-            if not last_message.tool_calls:
-                return END
-            else:
-                return "tools"
 
-        builder = StateGraph(ScoutState)
-
-        builder.add_node("chatbot", scout_node)
-        builder.add_node("tools", ToolNode(self.tools))
-
-        builder.add_edge(START, "chatbot")
-        builder.add_conditional_edges("chatbot", router, ["tools", END])
-        builder.add_edge("tools", "chatbot")
-
-        return builder.compile(checkpointer=MemorySaver())
-    
-
-    def inspect_graph(self):
-        """
-        Visualize the graph using the mermaid.ink API.
-        """
-        from IPython.display import display, Image
-
-        graph = self.build_graph()
-        display(Image(graph.get_graph(xray=True).draw_mermaid_png()))
+class GraphState(MessagesState):
+    question: str
+    generation: str
+    documents: List[str]
+    retry_search: bool
+    is_relevant: bool
 
 
-    def invoke(self, message: str, **kwargs) -> str:
-        """Synchronously invoke the graph.
 
-        Args:
-            message: The user message.
 
-        Returns:
-            str: The LLM response.
-        """
-        result = self.runnable.invoke(
-            input = {
-                "messages": [HumanMessage(content=message)]
-            },
-            **kwargs
+        # -- 2. Grader model: yes/no for question relevance --
+class RelevanceGrade(BaseModel):
+  binary_score: str = Field(description="Is the user's question related to DoDFMR Volume 7A? Answer 'yes' or 'no'.")
+
+
+        # -- 3. LLM setup --
+llm = ChatOpenAI(model_name="gpt-4o", temperature=0)
+structured_grader = llm.with_structured_output(RelevanceGrade)
+
+
+        # -- 4. Prompt for routing decision --
+relevance_prompt = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            """You are a classifier. Determine whether a user's question is related to the DoD Financial Management Regulation Volume 7A (military pay and entitlements).
+If the question is about military pay, entitlements, leave, bonuses, allowances, or anything related to finance per DoDFMR 7A, answer "yes".
+If it’s a greeting, thank you, small-talk, or unrelated, answer "no".""",
+        ),
+        ("human", "User question: {question}"),
+    ]
+)
+
+        # -- 5. Combine prompt and structured output LLM --
+relevance_chain = relevance_prompt | structured_grader
+
+
+     # -- 6. LangGraph node: sets is_relavent = True or False --
+def relevance(state: GraphState) -> Dict[str, Any]:
+    print("--Checking if question is related to DoDFMR 7A--")
+    question = state["messages"][-1]
+
+    score = relevance_chain.invoke({"question": question})
+    print(score)
+
+    grade = score.binary_score
+    print(grade)
+    if grade.lower() == "yes":
+        print("---GRADE: DOCUMENT RELEVANT---")
+        is_relevant = True
+    else:
+      print("---GRADE: DOCUMENT NOT RELEVANT---")
+      is_relevant = False
+    print(type(is_relevant))
+
+
+    return {"is_relevant": is_relevant}
+
+
+
+from typing import Any, Dict
+
+
+#Retrieve Node
+
+
+def retrieve(state:GraphState):
+  print("--Retriviening that hoe--")
+
+  question= state["messages"][-1].content
+  print(question)
+  documents= retriever.invoke(str(question))
+  print(documents)
+
+  return {"documents": documents}
+
+
+
+
+#Document Grader Node
+from langchain_openai import ChatOpenAI
+from langchain.prompts import ChatPromptTemplate
+from pydantic import BaseModel, Field
+
+llm = ChatOpenAI(model_name="gpt-4o", temperature=0)
+
+class GradeDocuments(BaseModel):
+  binary_score: str = Field(description= "documents are relavant to the question yes or no")
+
+structured_llm_grader = llm.with_structured_output(GradeDocuments)
+
+system = """You are a grader assessing relevance of a retrieved document to a user question. \n Add commentMore actions
+    If the document contains keyword(s) or semantic meaning related to the question, grade it as relevant. \n
+    Give a binary score 'yes' or 'no' score to indicate whether the document is relevant to the question."""
+grade_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", system),
+        ("human", "Retrieved document: \n\n {document} \n\n User question: {question}"),
+    ]
+)
+
+retrieval_grader = grade_prompt | structured_llm_grader
+
+def grade_documents(state:GraphState) -> Dict[str, Any]:
+  print("--Grading documents--")
+  documents=state["documents"]
+  question= state["messages"][-1].content
+
+  filtered_docs = []
+  retry_index = False
+  for d in documents:
+        score = retrieval_grader.invoke(
+            {"question": question, "document": d.page_content}
         )
-
-        return result["messages"][-1].content
-    
-
-    def stream(self, message: str, **kwargs) -> Generator[str, None, None]:
-        """Synchronously stream the results of the graph run.
-
-        Args:
-            message: The user message.
-
-        Returns:
-            str: The final LLM response or tool call response
-        """
-        for message_chunk, metadata in self.runnable.stream(
-            input = {
-                "messages": [HumanMessage(content=message)]
-            },
-            stream_mode="messages",
-            **kwargs
-        ):
-            if isinstance(message_chunk, AIMessageChunk):
-                if message_chunk.response_metadata:
-                    finish_reason = message_chunk.response_metadata.get("finish_reason", "")
-                    if finish_reason == "tool_calls":
-                        yield "\n\n"
-
-                if message_chunk.tool_call_chunks:
-                    tool_chunk = message_chunk.tool_call_chunks[0]
-
-                    tool_name = tool_chunk.get("name", "")
-                    args = tool_chunk.get("args", "")
-
-                    
-                    if tool_name:
-                        tool_call_str = f"\n\n< TOOL CALL: {tool_name} >\n\n"
-
-                    if args:
-                        tool_call_str = args
-                    yield tool_call_str
-                else:
-                    yield message_chunk.content
-                continue
+        grade = score.binary_score
+        if grade.lower() == "yes":
+            print("---GRADE: DOCUMENT RELEVANT---")
+            filtered_docs.append(d)
+        else:
+            print("---GRADE: DOCUMENT NOT RELEVANT---")
+            retry_index = True
+            continue
+  return {"documents": filtered_docs, "retry_index": retry_index}
 
 
-# Define and instantiate the agent 
-agent = Agent(
-        name="Scout",
-        system_prompt=prompts.scout_system_prompt
+from langchain import hub
+from langchain_core.output_parsers import StrOutputParser
+from langchain_openai import ChatOpenAI
+
+llm = ChatOpenAI(model= "gpt-4o",temperature=0)
+prompt = grade_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", """You are an assistant for question-answering tasks. 
+        Use the following pieces of retrieved context to answer the question.if there is no context be nice and friendly, If you don't know the answer,
+        just say that it is not in your scope of information.
+        Use three sentences maximum and keep the answer concise.
+
+"""),
+        ("human", "Question:{question} Context: {context} "),
+    ]
+)
+
+generation_chain = prompt | llm | StrOutputParser()
+
+
+from typing import Any, Dict
+
+
+def generate(state: GraphState) -> Dict[str, Any]:
+    print("---GENERATE---")
+    question = state["messages"][-1].content
+    documents = state.get("documents", [])
+
+
+    generation = generation_chain.invoke({"context": documents, "question": question})
+    return {"documents": documents, "messages": generation}
+
+
+
+from IPython.display import Image, display
+
+from langgraph.graph import END, StateGraph
+
+
+def decide_to_generate(state):
+    print("---ASSESS QUESTION RELEVANCY---")
+
+
+    if state["is_relevant"]:
+        print(
+            "---DECISION: RETRIEVE---"
         )
-graph = agent.build_graph()
+        return "retrieve"
+    else:
+        print("---DECISION: GENERATE---")
+        return "generate"
+
+
+builder = StateGraph(GraphState)
+
+builder.add_node("check_relevance", relevance)
+builder.add_node("retrieve", retrieve)
+builder.add_node("generate", generate)
+builder.add_node("grade_documents", grade_documents)
+
+builder.set_entry_point("check_relevance")
+builder.add_conditional_edges("check_relevance", decide_to_generate, {
+"retrieve":"retrieve",
+"generate":"generate"
+
+})
+
+builder.add_edge("retrieve", "grade_documents")
+builder.add_edge("grade_documents", "generate")
+builder.add_edge("generate", END)
+
+graph= builder.compile()
+
+
+# graph.get_graph().draw_mermaid_png(output_file_path="graph.png")
+
+thread={"configurable":{"thread_id":"skf8j"}}
+initial_input= {"messages": "thank you my friend"}
+for event in graph.stream(initial_input, thread, stream_mode="values"):
+  event["messages"][-1].pretty_print()

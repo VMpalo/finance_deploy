@@ -5,8 +5,13 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "faiss-cpu>=1.11.0",
+    "langchain>=0.3.26",
+    "langchain-community>=0.3.27",
     "langchain-core>=0.3.55",
+    "langchain-mistralai>=0.2.10",
     "langchain-openai>=0.3.14",
+    "langchain-pinecone>=0.2.8",
     "langgraph>=0.2.76",
     "pandas>=2.2.3",
     "plotly>=6.0.1",
