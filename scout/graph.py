@@ -1,5 +1,7 @@
 from typing import TypedDict
 from typing import List
+
+from langchain_core.messages import SystemMessage, AIMessage
 from langgraph.graph import MessagesState
 from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
@@ -27,7 +29,6 @@ retriever = vector.as_retriever()
 
 class GraphState(MessagesState):
     question: str
-    generation: str
     documents: List[str]
     retry_search: bool
     is_relevant: bool
@@ -63,22 +64,22 @@ relevance_chain = relevance_prompt | structured_grader
 
 
      # -- 6. LangGraph node: sets is_relavent = True or False --
-def relevance(state: GraphState) -> Dict[str, Any]:
+def relevance(state: GraphState):
     print("--Checking if question is related to DoDFMR 7A--")
     question = state["messages"][-1]
 
     score = relevance_chain.invoke({"question": question})
-    print(score)
+
 
     grade = score.binary_score
-    print(grade)
+
     if grade.lower() == "yes":
         print("---GRADE: DOCUMENT RELEVANT---")
         is_relevant = True
     else:
       print("---GRADE: DOCUMENT NOT RELEVANT---")
       is_relevant = False
-    print(type(is_relevant))
+
 
 
     return {"is_relevant": is_relevant}
@@ -155,19 +156,8 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_openai import ChatOpenAI
 
 llm = ChatOpenAI(model= "gpt-4o",temperature=0)
-prompt = grade_prompt = ChatPromptTemplate.from_messages(
-    [
-        ("system", """You are an assistant for question-answering tasks. 
-        Use the following pieces of retrieved context to answer the question.if there is no context be nice and friendly, If you don't know the answer,
-        just say that it is not in your scope of information.
-        Use three sentences maximum and keep the answer concise.
 
-"""),
-        ("human", "Question:{question} Context: {context} "),
-    ]
-)
 
-generation_chain = prompt | llm | StrOutputParser()
 
 
 from typing import Any, Dict
@@ -177,10 +167,20 @@ def generate(state: GraphState) -> Dict[str, Any]:
     print("---GENERATE---")
     question = state["messages"][-1].content
     documents = state.get("documents", [])
+    llm = ChatOpenAI(model="gpt-4o", temperature=0)
+    rag_prompt = """
+    You are an assistant for question-answering tasks. 
+            Use the following pieces of retrieved context to answer the question.if there is no context be nice and friendly, If you don't know the answer,
+            just say that it is not in your scope of information.
+            Use three sentences maximum and keep the answer concise.
+            Question:{question} Context: {context}
+    """
 
+    rag_instructions = rag_prompt.format(question=question, context=documents)
 
-    generation = generation_chain.invoke({"context": documents, "question": question})
-    return {"documents": documents, "messages": generation}
+    generation = llm.invoke([SystemMessage(content=rag_instructions)])
+    print(generation)
+    return {"messages": state["messages"] + [generation]}
 
 
 
